@@ -11,6 +11,8 @@ Browser -> FastAPI control plane -> AI/research services
 
 The browser never receives provider keys or the Kaggle token. The Kaggle notebook/worker uses `WORKER_TOKEN` to authenticate to the control plane.
 
+Server-side log/chat responses pass through a secret-redaction layer so token patterns (GitHub, Kaggle `KGAT_*`, `nvapi-*`, `sk-*`, `hf_*`, `glpat-*`, `Bearer *`) are masked before they are stored or displayed. Never paste real tokens into the chat or logs; rotate any that leak.
+
 ## What is included
 
 - `web/index.html` — mobile-first Meta-inspired visual language with an original Canvas network animation. It is not copied media.
@@ -49,6 +51,16 @@ If a real token was ever pasted into a chat, GitHub issue, screenshot, or public
 3. Install requirements from `kaggle_worker/requirements.txt`.
 4. Run `python /kaggle/working/worker.py` (or paste the worker into a notebook cell and run it).
 5. Keep the notebook session running while you want live control. The web app can only control a running worker; it cannot make Kaggle provide unlimited compute or bypass Kaggle quotas.
+
+### Live worker kernel
+
+A deployable worker script is shipped in the `rahul12-worker-t4` Kaggle kernel (`enable_gpu: true`, `machine_shape: NvidiaTeslaT4`, `enable_internet: true`). It sets `CONTROL_URL` to the backend's public preview URL, installs `httpx`/`psutil`, writes `worker.py`, and runs it. Regenerate the script with the current `CONTROL_URL` and `WORKER_TOKEN` before pushing:
+
+```bash
+kaggle kernels push -p ./worker-kernel
+```
+
+The backend does not need to run on Kaggle; it runs as the persistent web control plane and the Kaggle kernel is the ephemeral compute worker.
 
 ## Backend setup
 

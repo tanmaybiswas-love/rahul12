@@ -46,6 +46,22 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+SECRET_PATTERNS = [
+    re.compile(r"(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]+"),
+    re.compile(r"KGAT_[A-Za-z0-9]+"),
+    re.compile(r"hf_[A-Za-z0-9]+"),
+    re.compile(r"(sk|nvapi|glpat|kgl)[-_][A-Za-z0-9_\-]+"),
+    re.compile(r"Bearer\s+[A-Za-z0-9._\-]+", re.I),
+]
+
+
+def redact(text: str) -> str:
+    out = text
+    for pat in SECRET_PATTERNS:
+        out = pat.sub("***", out)
+    return out
+
+
 def db():
     con = sqlite3.connect(DB)
     con.execute("CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, role TEXT, content TEXT, created_at TEXT)")
@@ -226,7 +242,10 @@ async def status():
 
 @app.get("/api/logs")
 async def logs(limit: int = 200):
-    return {"logs": state["logs"][-max(1, min(limit, 1000)): ]}
+    items = []
+    for item in state["logs"][-max(1, min(limit, 1000)): ]:
+        copy = dict(item); copy["message"] = redact(copy.get("message", "")); items.append(copy)
+    return {"logs": items}
 
 
 @app.post("/api/chat")
@@ -247,7 +266,12 @@ async def chat(body: ChatIn):
             {"role": "system", "content": "You are a source-grounded research agent. Use the supplied search results only. Separate facts from uncertainty. Return concise source titles and URLs when available. Do not invent links."},
             {"role": "user", "content": json.dumps({"query": body.message, "tavily": tav, "youtube": yt}, ensure_ascii=False)}
         ]
-        result = await ai_chat(prompt, body.model); result["intent"] = intent
+        try:
+            result = await ai_chat(prompt, body.model); result["intent"] = intent
+        except Exception as e:
+            result = {"provider": "control-plane", "intent": intent,
+                      "answer": f"Research sources fetched but no AI provider is configured to summarize. Raw results:\n{json.dumps({'tavily': tav, 'youtube': yt}, ensure_ascii=False, indent=2)[:4000]}",
+                      "warning": redact(str(e))}
     elif intent in {"dataset", "train", "sync_repo"}:
         task = await queue_task(intent, {"request": body.message, "focus": body.focus or ""})
         result = {"provider": "orchestrator", "intent": intent, "task_id": task["id"], "answer": f"Workflow queued: {task['id']}\nStage: Inspect request\nWaiting for Kaggle worker."}
@@ -256,7 +280,12 @@ async def chat(body: ChatIn):
         msgs = [{"role": "system", "content": system}]
         if body.focus: msgs.append({"role": "system", "content": "Current focus:\n" + body.focus})
         msgs.append({"role": "user", "content": body.message})
-        result = await ai_chat(msgs, body.model); result["intent"] = intent
+        try:
+            result = await ai_chat(msgs, body.model); result["intent"] = intent
+        except Exception as e:
+            result = {"provider": "control-plane", "intent": intent,
+                      "answer": "AI providers are not configured on this backend. Add server-side provider keys (NVIDIA/GLM/OpenRouter/Groq/DeepSeek) to the backend secret store to enable conversational AI. Status and Kaggle task routing remain available.",
+                      "warning": redact(str(e))}
 
     con = db(); con.execute("INSERT INTO messages VALUES (?,?,?,?)", (str(uuid.uuid4()), "assistant", result["answer"], now())); con.commit(); con.close()
     await broadcast({"type": "chat", "data": result})
@@ -285,6 +314,7 @@ async def heartbeat(body: WorkerHeartbeat, x_worker_token: str = Header(default=
 @app.post("/api/worker/log")
 async def worker_log(body: WorkerEvent, x_worker_token: str = Header(default="")):
     auth_worker(x_worker_token)
+    body.message = redact(body.message)
     item = {"time": now(), **body.model_dump()}
     state["logs"].append(item); state["logs"] = state["logs"][-1000:]
     save_event("worker_log", item)
