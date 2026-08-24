@@ -1,5 +1,34 @@
-__pycache__/
-*.pyc
+# 🔐 Security & Secrets — NEVER commit these
 .env
+*.env
+*.key
+secrets.json
+credentials.json
+kaggle.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment & virtualenv
+.venv/
+venv/
+env/
+
+# Database & logs
 *.db
+*.sqlite
+*.sqlite3
 *.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
