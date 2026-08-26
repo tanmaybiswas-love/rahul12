@@ -96,7 +96,7 @@ cp .env.example .env
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Serve `web/index.html` from the same origin in production.
+`main:app` serves both the API and `web/index.html` from the same origin. `server.py` was removed.
 
 ## GitHub
 

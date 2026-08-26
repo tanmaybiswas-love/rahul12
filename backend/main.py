@@ -8,12 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import kaggle_manager
+from fastapi.staticfiles import StaticFiles
 
 APP_SECRET = os.getenv("APP_SECRET", "")
 WORKER_TOKEN = os.getenv("WORKER_TOKEN", "")
 DB = os.getenv("DB_PATH", "control.db")
 CORS_ORIGINS = [x.strip() for x in os.getenv("CORS_ORIGINS", "*").split(",") if x.strip()]
 CONTROL_URL = os.getenv("CONTROL_URL", "").rstrip("/")
+WEB_DIR = os.getenv("WEB_DIR", os.path.join(os.path.dirname(__file__), "..", "web"))
 
 app = FastAPI(title="Rahul12 AI Control Plane", version="3.0.0")
 app.add_middleware(
@@ -561,6 +563,9 @@ async def ws(websocket: WebSocket):
             await websocket.receive_text()
     except (WebSocketDisconnect, Exception):
         clients.discard(websocket)
+
+
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
 
 
 @app.on_event("startup")
