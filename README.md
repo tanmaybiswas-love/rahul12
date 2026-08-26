@@ -1,6 +1,6 @@
-# Rahul12 AI Control Center v2
+# Rahul12 AI Control Center v3
 
-A mobile-first AI control plane with an original animated network hero, chat commands, live workflow routing, Kaggle worker telemetry, logs, research APIs, dataset jobs and a small provider fallback chain.
+A mobile-first AI control plane with an original animated network hero, chat commands, live workflow routing, an auto resource router (CPU/GPU/TPU), Kaggle job management, tasks API, live logs, research APIs, dataset jobs and a small provider fallback chain.
 
 ## Architecture
 
@@ -16,9 +16,34 @@ Server-side log/chat responses pass through a secret-redaction layer so token pa
 ## What is included
 
 - `web/index.html` — mobile-first Meta-inspired visual language with an original Canvas network animation. It is not copied media.
-- `backend/main.py` — FastAPI control plane, chat router, AI fallback, research, task queue, worker telemetry, logs and WebSocket updates.
-- `kaggle_worker/worker.py` — Kaggle-side worker with CPU/RAM/GPU telemetry and staged workflow reporting.
+- `backend/main.py` — FastAPI control plane, chat router, AI planner, resource router, task queue + tasks API, Kaggle job control API, worker telemetry, logs, WebSocket updates and secret redaction.
+- `backend/kaggle_manager.py` — Kaggle CLI wrapper: quota, kernel status, kernel list, kernel push/run, kernel output.
+- `kaggle_worker/worker.py` — Kaggle-side worker with CPU/RAM/GPU/TPU telemetry, staged workflow reporting, retries and stop-command support.
 - `backend/.env.example` — server-side configuration names only.
+
+## API
+
+- `GET  /api/health` — liveness
+- `GET  /api/status` — unified status (worker state + workflow graph)
+- `GET  /api/logs` — redacted worker logs
+- `POST /api/chat` — chat-first control (status / research / dataset / train / sync_repo routing)
+- `GET  /api/tasks`, `GET /api/tasks/{id}`, `POST /api/tasks`, `POST /api/tasks/{id}/cancel`
+- `GET  /api/kaggle/status` — kernel status, GPU/CPU/TPU quota, kernel list
+- `GET  /api/kaggle/logs` — Kaggle kernel output + redacted worker logs
+- `POST /api/kaggle/run` — push and start the worker kernel (T4 GPU + internet)
+- `POST /api/kaggle/stop` — signal the worker to stop and cancel queued tasks
+- `WS   /ws` — live status/task/log/kaggle broadcasts
+- Worker endpoints (`/api/worker/*`) are protected by `X-Worker-Token`.
+
+## Resource router
+
+Tasks are auto-routed before execution:
+
+- **TPU** — TensorFlow/JAX/Flax workloads
+- **GPU** — training, PyTorch, CUDA, LLM inference
+- **CPU** — lightweight API/preprocessing/script tasks
+
+The selected resource and its reason are shown in the web UI resource-router panel.
 
 ## Provider routing
 

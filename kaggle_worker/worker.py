@@ -1,4 +1,4 @@
-import os, time, json, socket, subprocess, platform
+import os, time, json, subprocess, platform
 from pathlib import Path
 import httpx
 
@@ -11,9 +11,14 @@ LOG_DIR = Path("/kaggle/working/rahul12_logs"); LOG_DIR.mkdir(parents=True, exis
 def headers(): return {"X-Worker-Token": WORKER_TOKEN}
 
 
-def post(path, payload):
-    with httpx.Client(timeout=30) as c:
+def post(path, payload, timeout=30):
+    with httpx.Client(timeout=timeout) as c:
         r = c.post(CONTROL_URL + path, headers=headers(), json=payload); r.raise_for_status(); return r.json()
+
+
+def get(path, timeout=30):
+    with httpx.Client(timeout=timeout) as c:
+        r = c.get(CONTROL_URL + path, headers=headers()); r.raise_for_status(); return r.json()
 
 
 def gpu_info():
@@ -31,6 +36,15 @@ def gpu_info():
         return {"count":0,"devices":[]}
 
 
+def tpu_info():
+    try:
+        if os.path.exists("/dev/accel0") or os.environ.get("TPU_NAME"):
+            return {"available": True, "type": os.environ.get("TPU_ACCELERATOR_TYPE", "TPU")}
+    except Exception:
+        pass
+    return {"available": False}
+
+
 def cpu_info():
     return {"logical": os.cpu_count() or 1, "platform": platform.platform()}
 
@@ -44,12 +58,22 @@ def ram_info():
         return {}
 
 
+def detect_resource():
+    g=gpu_info()
+    t=tpu_info()
+    if t.get("available"):
+        return "tpu", g
+    if g["count"]:
+        return "gpu", g
+    return "cpu", g
+
+
 def heartbeat(task=None, task_id=None, progress=0, stage="idle", label="Idle", workflow=None):
-    g=gpu_info(); resource="gpu" if g["count"] else "cpu"
+    resource, g = detect_resource()
     return post("/api/worker/heartbeat", {
-        "resource":resource,"gpu":g,"cpu":cpu_info(),"ram":ram_info(),
+        "resource": resource,"gpu":g,"cpu":cpu_info(),"ram":ram_info(),
         "task":task,"task_id":task_id,"progress":progress,
-        "stage":stage,"stage_label":label,"quota":{},"workflow":workflow or [],"version":"2.0.0"
+        "stage":stage,"stage_label":label,"quota":{},"workflow":workflow or [],"version":"3.0.0"
     })
 
 
@@ -109,10 +133,20 @@ def train(task):
     set_stage(task,"plan","Planning training workflow",25)
     set_stage(task,"route","Selecting training route",40)
     set_stage(task,"compute","Detecting Kaggle compute",55)
-    # Safety: this starter does not execute arbitrary code received through chat.
-    set_stage(task,"execute","Approved training entrypoint required",75)
+    g, t = gpu_info(), tpu_info()
+    device = "TPU" if t.get("available") else ("GPU" if g["count"] else "CPU")
+    set_stage(task,"execute",f"Training hook on {device}",75)
     set_stage(task,"verify","Waiting for approved training script",92)
     set_stage(task,"complete","Training hook reached",100)
+
+
+def sync_repo(task):
+    set_stage(task,"inspect","Inspecting repository sync request",10)
+    set_stage(task,"plan","Planning repository sync",30)
+    set_stage(task,"route","Preparing GitHub integration",55)
+    set_stage(task,"execute","Repository sync hook ready",80)
+    set_stage(task,"verify","Awaiting project-specific sync policy",95)
+    set_stage(task,"complete","Sync hook reached",100)
 
 
 def execute(task):
@@ -121,32 +155,42 @@ def execute(task):
     elif kind=="dataset": build_dataset(task)
     elif kind=="train": train(task)
     elif kind=="status": heartbeat("status",task["id"],100,"complete","Status collected",task.get("workflow",[]))
-    elif kind=="sync_repo":
-        set_stage(task,"inspect","Inspecting repository sync request",10)
-        set_stage(task,"plan","Planning repository sync",30)
-        set_stage(task,"route","Preparing GitHub integration",55)
-        set_stage(task,"execute","Repository sync hook ready",80)
-        set_stage(task,"verify","Awaiting project-specific sync policy",95)
-        set_stage(task,"complete","Sync hook reached",100)
+    elif kind=="sync_repo": sync_repo(task)
     else: raise ValueError("unsupported task")
 
 
 def main():
     if not WORKER_TOKEN: raise SystemExit("WORKER_TOKEN is required")
-    log("Rahul12 Kaggle worker starting")
+    log("Rahul12 Kaggle worker starting (v3.0.0)")
+    consecutive_failures = 0
     while True:
         try:
             heartbeat(None,None,0,"idle","Idle")
-            with httpx.Client(timeout=30) as c:
-                r=c.get(CONTROL_URL+"/api/worker/poll",headers=headers()); r.raise_for_status(); task=r.json().get("task")
+            res = get("/api/worker/poll")
+            if res.get("stop"):
+                log("Stop command received from control plane; exiting")
+                break
+            task = res.get("task")
             if task:
                 log(f"Starting {task['id']} [{task['type']}]")
                 try:
                     execute(task); post("/api/worker/complete",{"task_id":task["id"],"ok":True,"result":"completed"})
                 except Exception as e:
                     log(str(e),"error",task["id"]); post("/api/worker/complete",{"task_id":task["id"],"ok":False,"result":str(e)})
+                consecutive_failures = 0
+            else:
+                consecutive_failures = 0
             time.sleep(POLL_SECONDS)
+        except KeyboardInterrupt:
+            log("Worker stopped by interrupt")
+            break
         except Exception as e:
-            print("worker loop:",e,flush=True); time.sleep(POLL_SECONDS)
+            consecutive_failures += 1
+            print(f"worker loop: {e} (attempt {consecutive_failures})", flush=True)
+            if consecutive_failures >= 10:
+                log(f"Too many consecutive failures; pausing worker", "error")
+                consecutive_failures = 0
+                time.sleep(POLL_SECONDS * 5)
+            time.sleep(POLL_SECONDS)
 
 if __name__=="__main__": main()
